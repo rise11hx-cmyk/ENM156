@@ -61,9 +61,9 @@ class CostMeter:
             raise ValueError("no forward pass to count spikes from yet")
         per_frame = [s / self.frames for s in self.spikes]
         steps = model.steps_per_frame
-        # analog input into the first layer, once per frame; then one multiply
-        # per neuron and time step for its leak
-        macs = model.n_in * model.hidden[0] + steps * (sum(model.hidden) + model.n_out)
+        # analog input into the first layer (its weights that aren't pruned), once
+        # per frame; then one multiply per neuron and time step for its leak
+        macs = int(model.input_mask.sum()) + steps * (sum(model.hidden) + model.n_out)
         synops = sum(s * f for s, f in zip(per_frame, fan_out(model)))
         return {"macs": macs, "synops": synops,
                 "rates": [s / (h * steps) for s, h in zip(per_frame, model.hidden)],
