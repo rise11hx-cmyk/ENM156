@@ -76,5 +76,5 @@ types out, and validate on VCTK speakers that VoiceBank doesn't use (`[mix]`).
 
 ## License
 
-This project is licensed under the APGL-3.0 License.
+This project is licensed under the AGPL-3.0 License.
 See the [LICENSE](LICENSE) file for details
