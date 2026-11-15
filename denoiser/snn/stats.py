@@ -65,6 +65,8 @@ class CostMeter:
         # per frame; then one multiply per neuron and time step for its leak
         macs = int(model.input_mask.sum()) + steps * (sum(model.hidden) + model.n_out)
         synops = sum(s * f for s, f in zip(per_frame, fan_out(model)))
+        if model.skip:  # the current passed on to the next layer: one addition per neuron and time step
+            synops += steps * sum(model.hidden[1:])
         return {"macs": macs, "synops": synops,
                 "rates": [s / (h * steps) for s, h in zip(per_frame, model.hidden)],
                 "pj": macs * PJ_PER_MAC + synops * PJ_PER_SYNOP}

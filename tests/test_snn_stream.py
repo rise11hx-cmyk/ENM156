@@ -27,6 +27,8 @@ CASES = [  # [snn] settings changed from config.toml, and the output
     ({"steps_per_frame": 3}, "complex_mask"),
     ({"recurrent": True, "steps_per_frame": 2, "hidden": [48]}, "mask"),
     ({"learn_decay": False, "decay": 0.0}, "magnitude"),
+    ({"hidden": [48, 48, 48], "skip": True, "recurrent": True, "steps_per_frame": 2}, "complex_mask"),
+    ({"hidden": [48, 48, 48], "skip": True, "norm": True, "init_gain": 3.0}, "complex_mask"),
 ]
 SMALL = {"hidden": [64, 48], "threshold": 0.1}  # low threshold: an untrained network should spike
 

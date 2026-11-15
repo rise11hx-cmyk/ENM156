@@ -32,7 +32,8 @@ def make_model(cfg):
     elif model_type(cfg) == "snn":
         snn = cfg["snn"]
         model = LIFNet(n_in, n_out, tuple(snn["hidden"]), snn["recurrent"], snn["decay"], snn["readout_decay"],
-                       snn["learn_decay"], snn["threshold"], snn["surrogate_slope"], snn["steps_per_frame"], act)
+                       snn["learn_decay"], snn["threshold"], snn["surrogate_slope"], snn["steps_per_frame"], act,
+                       snn["skip"], snn["norm"], snn["init_gain"])
         last = model
     else:
         model = MLP(n_in, n_out, tuple(cfg["model"]["hidden"]), act)
@@ -59,7 +60,8 @@ def describe_net(cfg):
     if model_type(cfg) == "snn":
         snn = cfg["snn"]
         return (f"snn {n_in} -> {' -> '.join(map(str, snn['hidden']))} spiking neurons"
-                f"{' (recurrent)' if snn['recurrent'] else ''} -> {n_out}, "
+                f"{' (recurrent)' if snn['recurrent'] else ''}{', skip connections' if snn['skip'] else ''}"
+                f"{', normalised' if snn['norm'] else ''} -> {n_out}, "
                 f"{snn['steps_per_frame']} time step(s) per frame")
     return f"mlp {n_in} -> {' -> '.join(map(str, cfg['model']['hidden']))} -> {n_out}"
 

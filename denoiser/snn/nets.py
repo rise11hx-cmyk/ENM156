@@ -49,11 +49,21 @@ class LIFNet(SpikingModel):
     after the last one.
 
     `input_mask` (first-layer weights that exist: 1, pruned away: 0) lets
-    input connections be removed; see prune.py."""
+    input connections be removed; see prune.py.
+
+    Three options that help deep networks train:
+      skip       each layer's input current is also added to the next layer's
+                 (all layers must have the same size), so the training signal
+                 has a path past every layer
+      norm       batch normalisation of each layer's input current. After
+                 training it is a fixed scale and shift per neuron, which
+                 could be folded into the weights, so it adds no operations
+      init_gain  scales the starting weights of the layers fed by spikes;
+                 with the default (1) they start out nearly silent"""
 
     def __init__(self, n_in, n_out, hidden=(256, 256, 256), recurrent=False, decay=0.9,
                  readout_decay=0.5, learn_decay=True, threshold=1.0, slope=25.0,
-                 steps_per_frame=1, out_act=None):
+                 steps_per_frame=1, out_act=None, skip=False, norm=False, init_gain=1.0):
         super().__init__()
         self.n_in, self.n_out, self.hidden = n_in, n_out, tuple(hidden)
         self.steps_per_frame = steps_per_frame
@@ -66,6 +76,13 @@ class LIFNet(SpikingModel):
         self.bias = nn.Parameter(torch.zeros(n_out))  # of the output, added after the readout
         self.out_act = ACTIVATIONS[out_act]()
         self.register_buffer("input_mask", torch.ones(hidden[0], n_in))
+        if skip and len(set(hidden)) > 1:
+            raise ValueError(f"snn.skip needs layers of one size, got {list(hidden)}")
+        self.skip = skip
+        self.norms = nn.ModuleList(nn.BatchNorm1d(h) for h in hidden) if norm else None
+        with torch.no_grad():
+            for layer in self.inputs[1:]:
+                layer.weight.mul_(init_gain)
 
     def load_state_dict(self, state, *args, **kwargs):
         # checkpoints from before input_mask: nothing pruned
@@ -75,6 +92,14 @@ class LIFNet(SpikingModel):
         """The input frame as current into the first layer, without the pruned weights."""
         return F.linear(x, self.inputs[0].weight * self.input_mask, self.inputs[0].bias)
 
+    def current(self, i, below, shortcut=None):
+        """Input current of layer i from the layer below (the input frames for
+        layer 0), (..., size); shortcut: the current of the layer below."""
+        current = self.first(below) if i == 0 else self.inputs[i](below)
+        if self.norms is not None:
+            current = self.norms[i](current.reshape(-1, current.shape[-1])).reshape(current.shape)
+        return current + shortcut if self.skip and i else current
+
     def init_state(self, batch_shape, device):
         zeros = lambda n: torch.zeros(*batch_shape, n, device=device)
         return {"v": [zeros(h) for h in self.hidden],  # membrane potentials
@@ -83,14 +108,13 @@ class LIFNet(SpikingModel):
 
     def step(self, x, state):
         v, s, u = list(state["v"]), list(state["s"]), state["u"]
-        first = self.first(x)  # the same in every time step of the frame
+        first = self.current(0, x)  # the same in every time step of the frame
         for _ in range(self.steps_per_frame):
-            below = None
+            below = current = None
             for i, lif in enumerate(self.neurons):
-                current = first if i == 0 else self.inputs[i](below)
-                if self.recurrent is not None:
-                    current = current + self.recurrent[i](s[i])
-                s[i], v[i] = lif.step(current, v[i])
+                current = first if i == 0 else self.current(i, below, current)
+                own = self.recurrent[i](s[i]) if self.recurrent is not None else 0
+                s[i], v[i] = lif.step(current + own, v[i])
                 below = s[i]
             y, u = self.readout.step(self.out(below), u)
         return self.out_act(y + self.bias), {"v": v, "s": s, "u": u}
@@ -100,11 +124,11 @@ class LIFNet(SpikingModel):
         frame at a time with step(), but much faster."""
         lead_shape, (n_frames, n_in) = x.shape[:-2], x.shape[-2:]
         steps = self.steps_per_frame
-        currents = self.first(x.reshape(-1, n_frames, n_in)).repeat_interleave(steps, dim=1)
+        currents = self.current(0, x.reshape(-1, n_frames, n_in)).repeat_interleave(steps, dim=1)
         spikes = []
         for i, lif in enumerate(self.neurons):
             if i:
-                currents = self.inputs[i](spikes[-1])
+                currents = self.current(i, spikes[-1], currents)
             spikes.append(lif.run(currents, self.recurrent[i] if self.recurrent is not None else None))
         self.count(spikes, x[..., 0].numel())
         y = self.readout.run(self.out(spikes[-1]))[:, steps - 1::steps]  # after each frame's last step

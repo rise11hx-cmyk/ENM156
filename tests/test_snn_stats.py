@@ -75,6 +75,16 @@ def main():
     fresh.load_state_dict(net.state_dict())
     checks["mask is saved"] = torch.equal(fresh.input_mask, net.input_mask)
 
+    # skip connections: one more addition per neuron of layers 2.. and time step
+    plain, skip = LIFNet(10, 4, hidden=(8, 8, 8), threshold=0.1), LIFNet(10, 4, hidden=(8, 8, 8), threshold=0.1, skip=True)
+    with torch.no_grad():
+        skip.load_state_dict(plain.state_dict())
+        skip(x)
+        meter = CostMeter(skip)
+        meter.add()
+    by_spikes = sum(s * f for s, f in zip(meter.spikes, fan_out(skip))) / meter.frames
+    checks["skip additions"] = close(meter.cost()["synops"], by_spikes + 16)
+
     for name, ok in checks.items():
         print(f"{'ok  ' if ok else 'FAIL'} {name}")
     sys.exit(0 if all(checks.values()) else 1)
