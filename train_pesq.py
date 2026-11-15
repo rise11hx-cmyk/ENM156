@@ -106,7 +106,9 @@ def main():
         torch.manual_seed(tr["seed"])
     device = get_device(cfg)
     print(f"Using device: {describe_device(device)}")
+    rate_weight = cfg["snn"]["rate_weight"]
     model, cfg = initial_model(cfg, device, cfg["pesq"]["init_from"])
+    cfg["snn"]["rate_weight"] = rate_weight  # a setting of the loss, not of the checkpoint's model
     print_config(cfg, ("stft", "model", *(("snn",) if cfg["model"]["type"] == "snn" else ()), "train", "pesq"))
     print(describe_model(cfg))
 
