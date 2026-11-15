@@ -73,3 +73,8 @@ types out, and validate on VCTK speakers that VoiceBank doesn't use (`[mix]`).
 | `denoiser/stream.py` | live, chunk-by-chunk denoising |
 | `denoiser/pesq_loss.py` | differentiable PESQ loss for `train_pesq.py` |
 | `legacy/` | the original single-file experiments |
+
+## License
+
+This project is licensed under the APGL-3.0 License.
+See the [LICENSE](LICENSE) file for details
