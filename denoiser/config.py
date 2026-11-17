@@ -1,8 +1,15 @@
 """
 Settings come from config.toml (shared defaults), then config.local.toml
-(personal, git-ignored), then --set section.key=value on the command line.
+(personal, git-ignored), then the command line: --config FILE (a TOML file of
+settings, e.g. one from experiments/ or a run's own config.toml) and --set
+section.key=value, applied in the order given.
+
+Every training run writes the settings it used to config.toml in its output
+folder (save_run_config), and its log starts with the exact command, so a run
+can be repeated or shared with --config runs/<run>/config.toml.
 """
 import json
+import shlex
 import sys
 import tomllib
 from datetime import datetime
@@ -38,20 +45,96 @@ def parse_set(item):
     return {section: {name: value}}
 
 
-def load_config(overrides=()):
-    with open(ROOT / "config.toml", "rb") as f:
-        cfg = tomllib.load(f)
+CONFIG_FILE_MARK = "@"  # how --config files are told apart from --set items in the same list
+
+
+def read_toml(path: Path) -> dict:
+    with open(path, "rb") as f:
+        return tomllib.load(f)
+
+
+def load_config(overrides: list[str] = ()) -> dict:
+    """The settings: config.toml, config.local.toml, then `overrides` in order:
+    --set items ("section.key=value") and --config files ("@" + path)."""
+    cfg = read_toml(ROOT / "config.toml")
     if LOCAL_CONFIG.exists():
-        with open(LOCAL_CONFIG, "rb") as f:
-            merge(cfg, tomllib.load(f))
+        merge(cfg, read_toml(LOCAL_CONFIG))
     for item in overrides:
-        merge(cfg, parse_set(item))
+        if item.startswith(CONFIG_FILE_MARK):
+            path = resolve_path(item[len(CONFIG_FILE_MARK):])
+            if not path.is_file():
+                raise SystemExit(f"--config: no such file {path}")
+            merge(cfg, read_toml(path))
+        else:
+            merge(cfg, parse_set(item))
     return cfg
 
 
 def add_config_args(ap):
     ap.add_argument("--set", action="append", default=[], metavar="SECTION.KEY=VALUE",
                     help="Override a setting for this run, e.g. --set train.epochs=5 (repeatable).")
+    ap.add_argument("--config", action="append", dest="set", metavar="FILE",
+                    type=lambda path: CONFIG_FILE_MARK + path,
+                    help="Read settings from a TOML file, e.g. experiments/snn-1x256.toml or a run's "
+                         "config.toml (repeatable; applied in order with --set).")
+
+
+# Settings that describe the machine rather than the run: left out of a run's
+# config.toml (as comments), so loading someone else's doesn't point your
+# runs at their folders or GPU.
+MACHINE_SETTINGS = {
+    "data": ("voicebank_dir", "train_dir", "val_dir", "test_dir", "audio_cache",
+             "device", "audio_device", "vram_fraction"),
+    "mix": ("vctk_dir", "demand_dir", "voicebank_logs"),
+}
+# Left out too: loading a run's settings must not write into that run's folder.
+OUTPUT_SETTINGS = {"train": ("output_dir",), "filterbank": ("output_dir",)}
+
+
+def toml_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value)  # a JSON string is a valid TOML basic string
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_value(v) for v in value) + "]"
+    raise TypeError(f"can't write {value!r} ({type(value).__name__}) as a TOML value")
+
+
+def save_run_config(cfg: dict, path: Path) -> None:
+    """Writes the settings of a run to `path` as TOML that --config can load:
+    every section and key, except the machine and output settings above,
+    which are listed as comments instead."""
+    left_out = {**MACHINE_SETTINGS}
+    for section, keys in OUTPUT_SETTINGS.items():
+        left_out[section] = left_out.get(section, ()) + keys
+    lines = [f"# Settings of this run, written {datetime.now():%Y-%m-%d %H:%M} by:",
+             f"#   {command_line()}",
+             "# Repeat it with --config <this file> --set <section>.output_dir=<a new folder>.",
+             "# Left out because they belong to the machine or the run folder (set your own):"]
+    lines += [f"#   {section}.{key} = {toml_value(home_as_tilde(cfg[section][key]))}"
+              for section, keys in left_out.items() if section in cfg for key in keys if key in cfg[section]]
+    for section, values in cfg.items():
+        if not isinstance(values, dict):
+            raise TypeError(f"setting {section!r} is not in a [section]")
+        kept = {k: v for k, v in values.items() if k not in left_out.get(section, ())}
+        lines += ["", f"[{section}]"] + [f"{key} = {toml_value(value)}" for key, value in kept.items()]
+    Path(path).write_text("\n".join(lines) + "\n")
+
+
+def home_as_tilde(value):
+    """A path under the home folder as ~/..., so a shared config.toml doesn't carry your user name."""
+    home = str(Path.home())
+    if isinstance(value, str) and (value == home or value.startswith(home + "/")):
+        return "~" + value[len(home):]
+    return value
+
+
+def command_line() -> str:
+    """The command this process was started with, ready to paste."""
+    return shlex.join([Path(sys.executable).name, *sys.argv])
 
 
 def print_config(cfg, sections):
@@ -82,7 +165,8 @@ class _Tee:
 
 def log_output(path, init_from=""):
     """Copy everything printed from here on (stdout and stderr) to path,
-    replacing an older log there, like model.pt is replaced. A run that
+    replacing an older log there, like model.pt is replaced. The log starts
+    with the command the run was started with. A run that
     starts from a checkpoint (init_from) begins its log with the log.txt
     next to that checkpoint, so the log covers the model's whole training;
     if that log can't be read, the new log starts on its own. Each run's part
@@ -99,6 +183,7 @@ def log_output(path, init_from=""):
         file.write(previous.rstrip("\n") + f"\n\n===== continued from {init_from} at {now} =====\n\n")
     else:
         file.write(f"===== started at {now} =====\n\n")
+    file.write(f"command: {command_line()}\n\n")
     sys.stdout, sys.stderr = _Tee(sys.stdout, file), _Tee(sys.stderr, file)
     if problem:
         print(f"Couldn't add the log of {init_from}'s run ({problem}); this log starts here")
