@@ -6,6 +6,8 @@ the past half second, or a spiking network (SNN) that remembers the past in
 its neurons (`model.type`). Frames are causal by default, so the same model can
 run live (`denoiser/stream.py`) with a latency of one short window.
 
+[![tests](https://github.com/supersonic-lumina/ENM156/actions/workflows/tests.yml/badge.svg)](https://github.com/supersonic-lumina/ENM156/actions/workflows/tests.yml)
+
 ## Contents
  
 - [Setup](#setup)
@@ -86,7 +88,7 @@ All commands are run from the repository root. `.venv/bin/python` is the Python 
 The tests don't need the dataset. Run them all with:
 
 ```bash
-for t in tests/test_*.py; do echo "== $t"; .venv/bin/python "$t" || break; done
+for t in tests/test_*.py; do echo "== $t"; .venv/bin/python "$t" || exit 1; done
 ```
 
 Or one at a time:
